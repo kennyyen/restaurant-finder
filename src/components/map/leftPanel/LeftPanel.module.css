@@ -1,0 +1,24 @@
+.leftPanelContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  max-height: 100%;
+}
+
+.leftPanelContainer .data-reach-combobox {
+  flex: 1;
+}
+
+.suggestBtn {
+  font-size: 20px;
+  padding: 5px 10px;
+  border-radius: 0.5rem;
+  margin: 10px 0px;
+  cursor: pointer;
+}
+
+.combobox-input {
+  width: 100%;
+  padding: 0.5rem;
+}

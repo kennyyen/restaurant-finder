@@ -1,98 +1,213 @@
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+/**
+ * Map.tsx - the main application file
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   GoogleMap,
   useLoadScript,
   Marker,
+  InfoWindow,
   Circle,
 } from "@react-google-maps/api";
+import {
+  setIsLoading,
+  setSelectedRestaurant,
+  selectMapState,
+  setSearchRestaurantResult,
+  setSelectedRestaurantDetail,
+} from "./mapSlice";
 import styles from "./Map.module.css";
+import "./Map.module.css";
+import LeftPanel from "./leftPanel/LeftPanel";
+import { useAppSelector, useAppDispatch } from "../../app/hooks";
 
 // Typing
-type LatLngLiteral = google.maps.LatLngLiteral;
 // type DirectionsResult = google.maps.DirectionsResult;
 type MapOptions = google.maps.MapOptions;
-export default function Map() {
+type LibrariesOptions = (
+  | "places"
+  | "drawing"
+  | "geometry"
+  | "localContext"
+  | "visualization"
+)[];
+type PlaceResult = google.maps.places.PlaceResult;
+type PlaceResultArray = PlaceResult[] | null;
+type NearbyCallbackOptions = (
+  res: PlaceResultArray,
+  status: google.maps.places.PlacesServiceStatus,
+  pagination: google.maps.places.PlaceSearchPagination | null
+) => void;
+
+const libraries = ["places"] as LibrariesOptions;
+
+/**
+ * Main Map component
+ * @returns {React.ReactElement}
+ */
+export default function Map(): React.ReactElement {
   const { isLoaded } = useLoadScript({
+    id: "google-map-script",
     googleMapsApiKey: process.env.REACT_APP_GOOGLE_API_KEY,
-    libraries: ["places"],
+    libraries,
   });
   if (!isLoaded) return <div>Loading...</div>;
   return <CustomMap />;
 }
 
-let service;
+// Map service insatnce, for all map api services calls
+let service: google.maps.places.PlacesService;
 
-function CustomMap() {
-  const COGENT_OFFICE_POSITION = useMemo<LatLngLiteral>(
-    () => ({
-      lat: 35.6646782,
-      lng: 139.7378198,
-    }),
-    []
-  );
+/**
+ * Google map component
+ * @returns {React.ReactElement}
+ */
+function CustomMap(): React.ReactElement {
+  const mapState = useAppSelector(selectMapState);
+  const {
+    searchRestaurantResults,
+    selectedRestaurant,
+    selectedRestaurantDetail,
+    COGENT_OFFICE_POSITION,
+  } = mapState;
+  const dispatch = useAppDispatch();
   const mapRef = useRef<GoogleMap>();
   const mapOptions = useMemo<MapOptions>(
     () => ({
-      // disableDefaultUI: true,
       clickableIcons: false,
     }),
     []
   );
-  const getNearbyPlaces = (position: any, map: any) => {
-    let request = {
-      location: position,
-      // rankBy: google.maps.places.RankBy.DISTANCE,
-      keyword: "food",
-      radius: 1000,
-      type: "restaurant",
-    };
-    service = new google.maps.places.PlacesService(map);
-    service.nearbySearch(request, (res) => {
-      console.log("RES: ", res);
-    });
-    // service.nearbySearch(request, nearbyCallback);
-  };
   const [cogentOfficeKey, setCogentOfficeKey] = useState(
     `cogent-office-${Math.random()}`
   );
   const [cogentOfficeCircleKey, setCogentOfficeCircleKey] = useState(
     `cogent-office-circle-${Math.random()}`
   );
+  /**
+   * The Google Map Marker and Circle component requires a new key on every refresh
+   * to show properly, this useEffect will assign a new random key to the component
+   */
   useEffect(() => {
     setCogentOfficeKey(`cogent-office-${Math.random()}`);
     setCogentOfficeCircleKey(`cogent-office-circle-${Math.random()}`);
   }, []);
+  /**
+   * Handles the nearby service callback, query for next page
+   * if available
+   */
+  const nearbyCallback: NearbyCallbackOptions = useCallback(
+    (res, status, pagination) => {
+      if (status === "OK") {
+        dispatch(setSearchRestaurantResult(res || []));
+        if (pagination?.hasNextPage) {
+          pagination.nextPage();
+        } else {
+          dispatch(setIsLoading(false));
+        }
+      } else {
+        dispatch(setIsLoading(false));
+      }
+    },
+    [dispatch]
+  );
+  /**
+   * Gets the nearby restaurants around the center
+   */
+  const getNearbyPlaces = useCallback(
+    (position: google.maps.LatLng | google.maps.LatLngLiteral) => {
+      let request = {
+        location: position,
+        radius: 1000,
+        type: "restaurant",
+        opennow: true,
+      };
+      dispatch(setIsLoading(true));
+      service.nearbySearch(request, nearbyCallback);
+    },
+    [dispatch, nearbyCallback]
+  );
+  /**
+   * Google map onLoad callback, set up mapReft for childcomponent
+   * to perform action on the map
+   */
   const onLoad = useCallback(
     (map: any) => {
-      getNearbyPlaces(COGENT_OFFICE_POSITION, map);
+      // create listener after the load library is loaded
+      // want to wait until the map is stable before fetching for places
+      google.maps.event.addListenerOnce(map, "tilesloaded", function () {
+        service = new google.maps.places.PlacesService(map);
+        getNearbyPlaces(COGENT_OFFICE_POSITION);
+      });
       return (mapRef.current = map);
     },
-    [COGENT_OFFICE_POSITION]
+    [COGENT_OFFICE_POSITION, getNearbyPlaces]
   );
-  // const icon = {
-  //   url: "https://www.cogent.co.jp/wp-content/themes/cogentlabs/static/img/common/logo-en.png", // url
-  //   scaledSize: new google.maps.Size(64, 27), // scaled size
-  //   origin: new google.maps.Point(0, 0), // origin
-  //   anchor: new google.maps.Point(0, 0), // anchor,
-  // };
+  /**
+   * Get the location detail of selected restaurant,
+   * update global store selectedRestaurantDetail for display use
+   */
+  const getDetail = useCallback(
+    (
+      restaurant: PlaceResult,
+      position: google.maps.LatLngLiteral | google.maps.LatLng
+    ) => {
+      const { place_id } = restaurant;
+      const request = {
+        placeId: place_id || "",
+      };
+      service.getDetails(request, (res) => {
+        if (res) dispatch(setSelectedRestaurantDetail(res));
+        mapRef.current?.panTo(position);
+      });
+    },
+    [dispatch]
+  );
+  /**
+   * Listening on selectedRestuarant change, grab the detail info
+   * of the restaurant when updated
+   */
+  useEffect(() => {
+    if (
+      selectedRestaurant &&
+      selectedRestaurant.geometry &&
+      selectedRestaurant.geometry.location
+    ) {
+      const lat = selectedRestaurant.geometry.location.lat();
+      const lng = selectedRestaurant.geometry.location.lng();
+      getDetail(selectedRestaurant, { lat, lng });
+    }
+  }, [getDetail, selectedRestaurant]);
+  /**
+   * Display the info window above the selected Marker
+   * @returns {React.ReactElement}
+   */
+  const getInfoWindow = (): React.ReactElement => {
+    return (
+      <InfoWindow
+        position={selectedRestaurant.geometry?.location}
+        onCloseClick={() => {
+          dispatch(setSelectedRestaurant({}));
+        }}
+      >
+        <div className={styles.infoWindowChild}>
+          <h2>{selectedRestaurantDetail.name}</h2>
+          {selectedRestaurantDetail.photos?.map((photo, index) => (
+            <img
+              key={`info-window-detail-photo-${index}`}
+              className={styles.infoPanelImg}
+              src={photo.getUrl()}
+              alt="restaurant icon"
+            ></img>
+          ))}
+        </div>
+      </InfoWindow>
+    );
+  };
   return (
     <div className={styles.container}>
       <div className={styles.controls}>
-        <h1>Commute?</h1>
-        {/* <Places
-          setOffice={(position) => {
-            setOffice(position);
-            mapRef.current?.panTo(position);
-          }}
-        />
-        {!office && <p>Enter the address of your office.</p>}
-        {directions && <Distance leg={directions.routes[0].legs[0]} />} */}
+        <LeftPanel />
       </div>
       <div className={styles.map}>
         <GoogleMap
@@ -105,11 +220,66 @@ function CustomMap() {
           <Marker
             options={{ opacity: 1.0 }}
             key={cogentOfficeKey}
-            // key={`cogent-office-${Math.random()}`}
             position={COGENT_OFFICE_POSITION}
-            // icon={icon}
             label="C"
           />
+          {searchRestaurantResults &&
+            searchRestaurantResults?.length > 0 &&
+            searchRestaurantResults.map(
+              (restaurant) =>
+                restaurant.geometry?.location && (
+                  <Marker
+                    key={`marker-${restaurant.place_id}`}
+                    position={restaurant.geometry?.location}
+                    icon={{
+                      scaledSize: new window.google.maps.Size(30, 30),
+                      url: "./images/food-location.svg",
+                    }}
+                    onClick={() => {
+                      dispatch(setSelectedRestaurant(restaurant));
+                    }}
+                  >
+                    {selectedRestaurant === restaurant && getInfoWindow()}
+                  </Marker>
+                )
+            )}
+          {!(
+            searchRestaurantResults &&
+            searchRestaurantResults.find(
+              (restaurant) =>
+                restaurant.place_id === selectedRestaurant.place_id
+            )
+          ) &&
+            selectedRestaurant.geometry &&
+            selectedRestaurant.geometry.location && (
+              <Marker
+                key={`marker-detail-${selectedRestaurant.place_id}`}
+                position={selectedRestaurant.geometry?.location}
+                icon={{
+                  scaledSize: new window.google.maps.Size(30, 30),
+                  url: "./images/food-location.svg",
+                }}
+              >
+                <InfoWindow
+                  position={selectedRestaurant.geometry?.location}
+                  onCloseClick={() => {
+                    dispatch(setSelectedRestaurant({}));
+                  }}
+                >
+                  <div className={styles.infoWindowChild}>
+                    <h2>{selectedRestaurantDetail.name}</h2>
+                    {selectedRestaurantDetail.photos?.map((photo, index) => (
+                      <img
+                        key={`detail-img-${index}`}
+                        className={styles.infoPanelImg}
+                        src={photo.getUrl()}
+                        alt="restaurant icon"
+                      ></img>
+                    ))}
+                  </div>
+                </InfoWindow>
+              </Marker>
+            )}
           <Circle
             key={cogentOfficeCircleKey}
             center={COGENT_OFFICE_POSITION}
@@ -122,6 +292,7 @@ function CustomMap() {
   );
 }
 
+// the Circle component options
 const circleOptions = {
   strokeOpacity: 0.5,
   strokeWeight: 2,
