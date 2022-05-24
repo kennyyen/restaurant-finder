@@ -129,7 +129,8 @@ Combobox - "@reach/combobox": "^0.17.0"
 ## Note
 
 The `.env` file is not supposed to be commited, but kept in here for demo purpose. \
-(usually `.gitignore` will include this `.env` file)
+Please get a free Google Map API key and place it in this `.env` for the application \
+to run properly. (usually `.gitignore` will include this `.env` file)
 
 ## Powered by Create React App
 
